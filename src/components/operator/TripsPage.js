@@ -1,15 +1,25 @@
-// components/operator/TripsPage.js - FIXED FOR UUID
+// components/operator/TripsPage.js - MOBILE OPTIMIZED
 import React, { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient";
-import { Truck, CheckCircle, MapPin, MessageCircle, Plus } from "lucide-react";
+import { Truck, CheckCircle, MapPin, MessageCircle, Plus, Camera, X } from "lucide-react";
 
-export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
+export default function OperatorTripsPage({
+  currentUser,
+  orders,
+  loadOrders,
+}) {
   const [trips, setTrips] = useState([]);
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [loading, setLoading] = useState(true);
+  
+  // Delivery confirmation modal states
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmingOrder, setConfirmingOrder] = useState(null);
+  const [deliveryPhoto, setDeliveryPhoto] = useState(null);
+  const [deliveryPhotoPreview, setDeliveryPhotoPreview] = useState(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  // Get only MY branch's orders
-  const myOrders = orders.filter((o) => {
+  const myOrders = orders.filter(o => {
     if (currentUser.branch === "All") return true;
     return o.branch === currentUser.branch;
   });
@@ -20,12 +30,11 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
 
   const loadTrips = async () => {
     try {
-      // Load shared trips (branch = 'Shared')
       const { data, error } = await supabase
         .from("trips")
         .select("*")
         .eq("branch", "Shared")
-        .order("name", { ascending: true });
+        .order("name", { ascending: true});
 
       if (error) {
         console.error("Error loading trips:", error);
@@ -48,11 +57,11 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
     const tripNumber = trips.length + 1;
     const newTrip = {
       name: `Trip ${tripNumber}`,
-      trip_date: new Date().toISOString().split("T")[0],
+      trip_date: new Date().toISOString().split('T')[0],
       driver: "",
       branch: "Shared",
       order_ids: [],
-      status: "pending",
+      status: "pending"
     };
 
     const { data, error } = await supabase
@@ -71,8 +80,8 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
 
   const getUnassignedOrders = () => {
     return myOrders.filter((order) => {
-      const isAssigned = trips.some(
-        (trip) => trip.order_ids && trip.order_ids.includes(order.id)
+      const isAssigned = trips.some((trip) =>
+        trip.order_ids && trip.order_ids.includes(order.id)
       );
       return order.status === "pending" && !isAssigned;
     });
@@ -85,22 +94,14 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
 
   const getMyOrdersCount = (trip) => {
     if (!trip.order_ids || trip.order_ids.length === 0) return 0;
-    return myOrders.filter((o) => trip.order_ids.includes(o.id)).length;
+    return myOrders.filter(o => trip.order_ids.includes(o.id)).length;
   };
 
   const handleAddOrderToTrip = async (orderId, tripId) => {
-    console.log("Adding order:", orderId, "to trip:", tripId);
-    console.log("Order ID type:", typeof orderId);
-    console.log("Trip ID type:", typeof tripId);
-
     const trip = trips.find((t) => t.id === tripId);
-    if (!trip) {
-      console.error("Trip not found:", tripId);
-      return;
-    }
+    if (!trip) return;
 
     const newOrderIds = [...(trip.order_ids || []), orderId];
-    console.log("New order_ids array:", newOrderIds);
 
     const { error } = await supabase
       .from("trips")
@@ -108,13 +109,9 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
       .eq("id", tripId);
 
     if (error) {
-      console.error("Error adding order to trip:", error);
       alert("Error: " + error.message);
     } else {
-      await supabase
-        .from("orders")
-        .update({ status: "scheduled" })
-        .eq("id", orderId);
+      await supabase.from("orders").update({ status: "scheduled" }).eq("id", orderId);
       await loadTrips();
       await loadOrders(currentUser.branch);
     }
@@ -134,61 +131,100 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
     if (error) {
       alert("Error: " + error.message);
     } else {
-      await supabase
-        .from("orders")
-        .update({ status: "pending" })
-        .eq("id", orderId);
+      await supabase.from("orders").update({ status: "pending" }).eq("id", orderId);
       await loadTrips();
       await loadOrders(currentUser.branch);
     }
   };
 
-  const handleCompleteTrip = async (tripId) => {
-    const trip = trips.find((t) => t.id === tripId);
-    const myTripOrders = getTripOrders(trip);
+  const handleOpenConfirmModal = (order) => {
+    setConfirmingOrder(order);
+    setDeliveryPhoto(null);
+    setDeliveryPhotoPreview(null);
+    setShowConfirmModal(true);
+  };
 
-    if (myTripOrders.length === 0) {
-      alert("No deliveries from your branch in this trip");
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setDeliveryPhoto(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setDeliveryPhotoPreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleConfirmDelivery = async () => {
+    if (!deliveryPhoto) {
+      alert("Please take a photo of the delivery");
       return;
     }
 
-    if (
-      !window.confirm(
-        `Complete your ${myTripOrders.length} deliveries in "${trip.name}"?`
-      )
-    ) {
-      return;
+    setUploadingPhoto(true);
+
+    try {
+      const fileExt = deliveryPhoto.name.split('.').pop();
+      const fileName = `delivery_${confirmingOrder.id}_${Date.now()}.${fileExt}`;
+      const filePath = fileName;
+
+      const { error: uploadError } = await supabase.storage
+        .from('delivery-evidence')
+        .upload(filePath, deliveryPhoto);
+
+      if (uploadError) {
+        console.error("Upload error:", uploadError);
+        alert("Error uploading photo. Using base64 instead.");
+        
+        await supabase
+          .from("orders")
+          .update({
+            status: "delivered",
+            delivery_evidence: deliveryPhotoPreview,
+            delivered_date: new Date().toISOString().split('T')[0],
+          })
+          .eq("id", confirmingOrder.id);
+      } else {
+        const { data: { publicUrl } } = supabase.storage
+          .from('delivery-evidence')
+          .getPublicUrl(filePath);
+
+        await supabase
+          .from("orders")
+          .update({
+            status: "delivered",
+            delivery_evidence: publicUrl,
+            delivered_date: new Date().toISOString().split('T')[0],
+          })
+          .eq("id", confirmingOrder.id);
+      }
+
+      const trip = trips.find(t => t.order_ids && t.order_ids.includes(confirmingOrder.id));
+      if (trip) {
+        const newOrderIds = trip.order_ids.filter(id => id !== confirmingOrder.id);
+        await supabase
+          .from("trips")
+          .update({ order_ids: newOrderIds })
+          .eq("id", trip.id);
+      }
+
+      await loadTrips();
+      await loadOrders(currentUser.branch);
+      
+      setShowConfirmModal(false);
+      setConfirmingOrder(null);
+      alert("Delivery confirmed!");
+    } catch (error) {
+      console.error("Error confirming delivery:", error);
+      alert("Error: " + error.message);
+    } finally {
+      setUploadingPhoto(false);
     }
-
-    for (const order of myTripOrders) {
-      await supabase
-        .from("orders")
-        .update({ status: "delivered" })
-        .eq("id", order.id);
-    }
-
-    const remainingOrders = (trip.order_ids || []).filter(
-      (id) => !myTripOrders.find((o) => o.id === id)
-    );
-
-    await supabase
-      .from("trips")
-      .update({
-        order_ids: remainingOrders,
-        status: remainingOrders.length === 0 ? "completed" : "in-progress",
-      })
-      .eq("id", tripId);
-
-    await loadTrips();
-    await loadOrders(currentUser.branch);
-    alert("Deliveries completed!");
   };
 
   const handleUpdateDriver = async (tripId, driverName) => {
-    await supabase
-      .from("trips")
-      .update({ driver: driverName })
-      .eq("id", tripId);
+    await supabase.from("trips").update({ driver: driverName }).eq("id", tripId);
     await loadTrips();
   };
 
@@ -225,7 +261,7 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
   if (loading) {
     return (
       <div className="p-4 text-center">
-        <p className="text-gray-500">Loading...</p>
+        <p className="text-gray-500 text-sm">Loading...</p>
       </div>
     );
   }
@@ -234,52 +270,137 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
   const unassignedOrders = getUnassignedOrders();
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-3 space-y-3">
+      {/* Header - Compact */}
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold">Delivery Trips</h2>
-          <p className="text-sm text-gray-600 mt-1">
-            {currentUser.branch} Branch
-          </p>
+          <h2 className="text-xl font-bold">Delivery Trips</h2>
+          <p className="text-xs text-gray-600">{currentUser.branch}</p>
         </div>
         <button
           onClick={handleCreateNewTrip}
-          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
+          className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 flex items-center gap-1 text-sm"
         >
-          <Plus size={20} />
-          New Trip
+          <Plus size={16} />
+          <span className="hidden sm:inline">New</span>
         </button>
       </div>
 
+      {/* Delivery Confirmation Modal - Mobile Optimized */}
+      {showConfirmModal && confirmingOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3">
+          <div className="bg-white rounded-lg p-4 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-base font-bold">Confirm Delivery</h3>
+              <button onClick={() => setShowConfirmModal(false)} className="text-gray-500">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="bg-gray-50 p-2 rounded-lg">
+                <p className="font-bold text-sm">{confirmingOrder.customer_name}</p>
+                <p className="text-xs text-gray-600 line-clamp-2">{confirmingOrder.customer_address}</p>
+                <p className="text-xs font-medium text-green-600 mt-1">
+                  Rp {confirmingOrder.total_amount?.toLocaleString() || 0}
+                </p>
+              </div>
+
+              {/* Photo Upload - Compact */}
+              <div>
+                <label className="block text-xs font-bold mb-2">
+                  Delivery Photo * (Required)
+                </label>
+                
+                {!deliveryPhotoPreview ? (
+                  <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-blue-400 rounded-lg cursor-pointer bg-blue-50">
+                    <Camera size={40} className="text-blue-600 mb-2" />
+                    <p className="text-xs text-blue-600 font-medium">Take Photo</p>
+                    <p className="text-xs text-gray-500 mt-1">or choose from gallery</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handlePhotoSelect}
+                      className="hidden"
+                    />
+                  </label>
+                ) : (
+                  <div className="relative">
+                    <img
+                      src={deliveryPhotoPreview}
+                      alt="Delivery"
+                      className="w-full h-48 object-cover rounded-lg border-2 border-green-400"
+                    />
+                    <button
+                      onClick={() => {
+                        setDeliveryPhoto(null);
+                        setDeliveryPhotoPreview(null);
+                      }}
+                      className="absolute top-2 right-2 bg-red-600 text-white p-1.5 rounded-full"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Buttons - Mobile Friendly */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handleConfirmDelivery}
+                  disabled={!deliveryPhoto || uploadingPhoto}
+                  className="flex-1 bg-green-600 text-white py-2.5 rounded-lg font-bold disabled:bg-gray-400 flex items-center justify-center gap-2 text-sm"
+                >
+                  {uploadingPhoto ? (
+                    "Uploading..."
+                  ) : (
+                    <>
+                      <CheckCircle size={16} />
+                      Confirm
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowConfirmModal(false)}
+                  className="px-4 bg-gray-300 text-gray-700 py-2.5 rounded-lg font-bold text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {trips.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg shadow">
-          <Truck size={48} className="mx-auto mb-3 text-gray-400" />
-          <p className="font-bold text-gray-600">No trips found</p>
-          <p className="text-sm text-gray-500 mt-2">
-            Click "New Trip" to create Trip 1
-          </p>
+        <div className="text-center py-8 bg-white rounded-lg shadow">
+          <Truck size={40} className="mx-auto mb-2 text-gray-400" />
+          <p className="font-bold text-gray-600 text-sm">No trips found</p>
+          <p className="text-xs text-gray-500 mt-1">Click "New" to create Trip 1</p>
         </div>
       ) : (
         <>
-          <div className="bg-white shadow-sm rounded-lg overflow-x-auto">
-            <div className="flex border-b">
+          {/* Trip Tabs - Mobile Scrollable */}
+          <div className="bg-white shadow-sm rounded-lg overflow-x-auto -mx-3 px-3">
+            <div className="flex border-b gap-1">
               {trips.map((trip) => {
                 const myCount = getMyOrdersCount(trip);
                 return (
                   <button
                     key={trip.id}
                     onClick={() => setSelectedTrip(trip.id)}
-                    className={`px-6 py-3 font-medium whitespace-nowrap ${
+                    className={`px-4 py-2 font-medium whitespace-nowrap text-xs ${
                       selectedTrip === trip.id
                         ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50"
-                        : "text-gray-600 hover:bg-gray-50"
+                        : "text-gray-600"
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      <Truck size={18} />
+                    <div className="flex items-center gap-1">
+                      <Truck size={14} />
                       <span>{trip.name}</span>
                       {myCount > 0 && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold">
+                        <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold">
                           {myCount}
                         </span>
                       )}
@@ -289,10 +410,10 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
               })}
               <button
                 onClick={() => setSelectedTrip(null)}
-                className={`px-6 py-3 font-medium whitespace-nowrap ${
+                className={`px-4 py-2 font-medium whitespace-nowrap text-xs ${
                   selectedTrip === null
                     ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50"
-                    : "text-gray-600 hover:bg-gray-50"
+                    : "text-gray-600"
                 }`}
               >
                 Unassigned ({unassignedOrders.length})
@@ -301,185 +422,149 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
           </div>
 
           {currentTrip ? (
-            <div className="space-y-4">
-              <div className="bg-white p-4 rounded-lg shadow">
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <h3 className="font-bold text-lg">{currentTrip.name}</h3>
-                    <div className="mt-3 space-y-2">
-                      <div>
-                        <label className="text-xs text-gray-600 block mb-1">
-                          Driver:
-                        </label>
-                        <input
-                          type="text"
-                          value={currentTrip.driver || ""}
-                          onChange={(e) =>
-                            handleUpdateDriver(currentTrip.id, e.target.value)
-                          }
-                          placeholder="Enter driver name"
-                          className="w-full px-3 py-2 border rounded"
-                        />
-                      </div>
-                      <div className="flex gap-4 text-sm">
-                        <div>
-                          <span className="text-gray-600">Date:</span>
-                          <span className="ml-2 font-medium">
-                            {currentTrip.trip_date}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-gray-600">Your Orders:</span>
-                          <span className="ml-2 font-bold text-blue-600">
-                            {getMyOrdersCount(currentTrip)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 ml-4">
-                    {getMyOrdersCount(currentTrip) > 0 && (
+            <div className="space-y-3">
+              {/* Trip Header - Compact */}
+              <div className="bg-white p-3 rounded-lg shadow">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-bold text-base">{currentTrip.name}</h3>
+                    {getMyOrdersCount(currentTrip) === 0 && currentTrip.order_ids?.length === 0 && (
                       <button
-                        onClick={() => handleCompleteTrip(currentTrip.id)}
-                        className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
+                        onClick={() => handleDeleteTrip(currentTrip.id)}
+                        className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs"
                       >
-                        <CheckCircle size={18} />
-                        Complete
+                        Delete
                       </button>
                     )}
-                    {getMyOrdersCount(currentTrip) === 0 &&
-                      currentTrip.order_ids?.length === 0 && (
-                        <button
-                          onClick={() => handleDeleteTrip(currentTrip.id)}
-                          className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700"
-                        >
-                          Delete
-                        </button>
-                      )}
+                  </div>
+                  
+                  <div>
+                    <label className="text-xs text-gray-600">Driver:</label>
+                    <input
+                      type="text"
+                      value={currentTrip.driver || ""}
+                      onChange={(e) => handleUpdateDriver(currentTrip.id, e.target.value)}
+                      placeholder="Enter driver name"
+                      className="w-full px-2 py-1.5 border rounded text-sm mt-1"
+                    />
+                  </div>
+                  
+                  <div className="flex gap-3 text-xs">
+                    <div>
+                      <span className="text-gray-600">Date:</span>
+                      <span className="ml-1 font-medium">{currentTrip.trip_date}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Orders:</span>
+                      <span className="ml-1 font-bold text-blue-600">{getMyOrdersCount(currentTrip)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
 
+              {/* Trip Orders - Mobile Optimized */}
               {getTripOrders(currentTrip).length > 0 ? (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {getTripOrders(currentTrip).map((order, index) => (
-                    <div
-                      key={order.id}
-                      className="bg-white p-4 rounded-lg shadow border-l-4 border-blue-500"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="bg-blue-600 text-white rounded-full w-10 h-10 flex items-center justify-center font-bold flex-shrink-0">
+                    <div key={order.id} className="bg-white p-3 rounded-lg shadow border-l-4 border-blue-500">
+                      <div className="flex items-start gap-2">
+                        <div className="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center font-bold text-xs flex-shrink-0">
                           {index + 1}
                         </div>
-                        <div className="flex-1">
-                          <h4 className="font-bold text-lg">
-                            {order.customer_name}
-                          </h4>
-                          <p className="text-sm text-gray-600 flex items-start gap-1 mt-1">
-                            <MapPin
-                              size={14}
-                              className="mt-0.5 flex-shrink-0"
-                            />
-                            {order.customer_address}
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-bold text-sm">{order.customer_name}</h4>
+                          <p className="text-xs text-gray-600 flex items-start gap-1 mt-1">
+                            <MapPin size={10} className="mt-0.5 flex-shrink-0" />
+                            <span className="line-clamp-2">{order.customer_address}</span>
                           </p>
-                          <p className="text-sm font-medium text-green-600 mt-2">
+                          <p className="text-xs font-medium text-green-600 mt-1">
                             Rp {order.total_amount?.toLocaleString() || 0}
                           </p>
                         </div>
-                        <div className="flex gap-2">
-                          {order.customer_whatsapp && (
-                            <a
-                              href={`https://wa.me/${order.customer_whatsapp}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
-                            >
-                              <MessageCircle size={18} />
-                              <span>WA</span>
-                            </a>
-                          )}
-                          <button
-                            onClick={() =>
-                              handleRemoveOrderFromTrip(
-                                order.id,
-                                currentTrip.id
-                              )
-                            }
-                            className="bg-red-100 text-red-700 px-4 py-2 rounded-lg hover:bg-red-200 font-medium"
+                      </div>
+                      
+                      {/* Action Buttons - Stacked on Mobile */}
+                      <div className="flex gap-2 mt-2">
+                        {order.customer_whatsapp && (
+                          <a
+                            href={`https://wa.me/${order.customer_whatsapp}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-1 text-xs"
                           >
-                            Remove
-                          </button>
-                        </div>
+                            <MessageCircle size={14} />
+                            WA
+                          </a>
+                        )}
+                        <button
+                          onClick={() => handleOpenConfirmModal(order)}
+                          className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-1 font-medium text-xs"
+                        >
+                          <Camera size={14} />
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => handleRemoveOrderFromTrip(order.id, currentTrip.id)}
+                          className="bg-red-100 text-red-700 px-3 py-2 rounded-lg hover:bg-red-200 font-medium text-xs"
+                        >
+                          Remove
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-12 bg-white rounded-lg shadow">
-                  <Truck size={48} className="mx-auto mb-3 text-gray-400" />
-                  <p className="font-medium text-gray-600">
-                    No orders from your branch
-                  </p>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Go to "Unassigned" to add orders
-                  </p>
+                <div className="text-center py-8 bg-white rounded-lg shadow">
+                  <Truck size={40} className="mx-auto mb-2 text-gray-400" />
+                  <p className="font-medium text-gray-600 text-sm">No orders assigned</p>
+                  <p className="text-xs text-gray-500 mt-1">Go to "Unassigned" tab</p>
                 </div>
               )}
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                <h3 className="font-bold text-blue-900">Unassigned Orders</h3>
-                <p className="text-sm text-blue-700 mt-1">
-                  {currentUser.branch} Branch - Assign orders to trips
+            /* Unassigned Orders - Mobile Optimized */
+            <div className="space-y-3">
+              <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                <h3 className="font-bold text-blue-900 text-sm">Unassigned Orders</h3>
+                <p className="text-xs text-blue-700 mt-1">
+                  {currentUser.branch} - Assign to trips
                 </p>
               </div>
 
               {unassignedOrders.length > 0 ? (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {unassignedOrders.map((order) => (
-                    <div
-                      key={order.id}
-                      className="bg-white p-4 rounded-lg shadow border"
-                    >
-                      <div className="flex justify-between items-start gap-3">
-                        <div className="flex-1">
-                          <h4 className="font-bold text-lg">
-                            {order.customer_name}
-                          </h4>
-                          <p className="text-sm text-gray-600 flex items-start gap-1 mt-1">
-                            <MapPin
-                              size={14}
-                              className="mt-0.5 flex-shrink-0"
-                            />
-                            {order.customer_address}
+                    <div key={order.id} className="bg-white p-3 rounded-lg shadow border">
+                      <div className="space-y-2">
+                        <div>
+                          <h4 className="font-bold text-sm">{order.customer_name}</h4>
+                          <p className="text-xs text-gray-600 flex items-start gap-1 mt-1">
+                            <MapPin size={10} className="mt-0.5 flex-shrink-0" />
+                            <span className="line-clamp-2">{order.customer_address}</span>
                           </p>
-                          <div className="flex gap-3 mt-2 text-sm">
-                            <span className="text-gray-600">
-                              📅 {order.delivery_date}
-                            </span>
+                          <div className="flex gap-2 mt-1 text-xs">
+                            <span className="text-gray-600">📅 {order.delivery_date}</span>
                             <span className="font-medium text-green-600">
                               Rp {order.total_amount?.toLocaleString() || 0}
                             </span>
                           </div>
                         </div>
+                        
+                        {/* Full Width Dropdown */}
                         <select
                           onChange={(e) => {
                             if (e.target.value) {
-                              // Trip ID is already a string (UUID), no need to parse
                               handleAddOrderToTrip(order.id, e.target.value);
                               e.target.value = "";
                             }
                           }}
-                          className="px-4 py-2 border-2 border-blue-600 rounded-lg bg-white text-blue-600 hover:bg-blue-50 font-medium"
+                          className="w-full px-3 py-2 border-2 border-blue-600 rounded-lg bg-white text-blue-600 font-medium text-sm"
                           defaultValue=""
                         >
-                          <option value="" disabled>
-                            Assign →
-                          </option>
+                          <option value="" disabled>Assign to Trip →</option>
                           {trips.map((trip) => (
                             <option key={trip.id} value={trip.id}>
-                              {trip.name}
+                              {trip.name} ({getMyOrdersCount(trip)} orders)
                             </option>
                           ))}
                         </select>
@@ -488,14 +573,9 @@ export default function OperatorTripsPage({ currentUser, orders, loadOrders }) {
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-12 bg-white rounded-lg shadow">
-                  <CheckCircle
-                    size={48}
-                    className="mx-auto mb-3 text-green-400"
-                  />
-                  <p className="font-bold text-gray-600">
-                    All orders assigned!
-                  </p>
+                <div className="text-center py-8 bg-white rounded-lg shadow">
+                  <CheckCircle size={40} className="mx-auto mb-2 text-green-400" />
+                  <p className="font-bold text-gray-600 text-sm">All orders assigned!</p>
                 </div>
               )}
             </div>
